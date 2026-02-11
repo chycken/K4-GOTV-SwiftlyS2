@@ -9,7 +9,7 @@ namespace K4GOTV;
 
 [PluginMetadata(
 	Id = "k4.gotv",
-	Version = "1.0.1",
+	Version = "1.0.2",
 	Name = "K4 - GOTV",
 	Author = "K4ryuu",
 	Description = "Advanced GOTV handler with Discord, database, FTP, SFTP and Mega integration.")]
@@ -30,7 +30,7 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 	private string RetentionFilePath => Path.Combine(Core.PluginDataDirectory, "uploads_retention.json");
 	private string PayloadTemplatePath => Path.Combine(Core.PluginPath, "resources", "payload.json");
 
-	private int MaxDiscordFileSizeMB => Config.CurrentValue.Discord.ServerBoost switch { 2 => 50, 3 => 100, _ => 25 };
+	private static int MaxDiscordFileSizeMB => Config.CurrentValue.Discord.ServerBoost switch { 2 => 50, 3 => 100, _ => 25 };
 
 	public override void Load(bool hotReload)
 	{
@@ -43,8 +43,8 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 
 		ServiceCollection services = new();
 		services.AddSwiftly(Core)
-			.AddOptions<PluginConfig>()
-			.BindConfiguration(ConfigFileName);
+			.AddOptionsWithValidateOnStart<PluginConfig>()
+			.BindConfiguration(ConfigSection);
 
 		var provider = services.BuildServiceProvider();
 		Config = provider.GetRequiredService<IOptionsMonitor<PluginConfig>>();
