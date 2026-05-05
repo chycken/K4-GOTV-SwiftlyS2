@@ -9,7 +9,7 @@ public sealed partial class Plugin
 {
 	private record RetentionRecord(string Service, string Identifier, DateTime UploadedAt);
 
-	private async Task DeleteFileAsync(string path)
+	private async Task DeleteFileAsync(string path, bool forceDeleteDemo = false)
 	{
 		for (int i = 0; i < 3; i++)
 		{
@@ -17,6 +17,14 @@ public sealed partial class Plugin
 			{
 				if (!File.Exists(path))
 					return;
+
+				var extension = Path.GetExtension(path);
+
+				if (extension.Equals(".dem", StringComparison.OrdinalIgnoreCase) && !forceDeleteDemo)
+				{
+					Core.Logger.LogInformation("Skipped demo delete: {Path}", path);
+					return;
+				}
 
 				File.Delete(path);
 
@@ -34,6 +42,37 @@ public sealed partial class Plugin
 				Core.Logger.LogError("Delete failed: {Message}", ex.Message);
 				return;
 			}
+		}
+	}
+
+	private async Task DeleteEveryLocalDemoFileAfterServerStartAsync()
+	{
+		try
+		{
+			Directory.CreateDirectory(DemoDirectory);
+
+			var files = Directory.GetFiles(DemoDirectory, "*.dem")
+				.Concat(Directory.GetFiles(DemoDirectory, "*.zip"))
+				.ToList();
+
+			if (files.Count == 0)
+			{
+				Core.Logger.LogInformation("Server start demo cleanup: no .dem or .zip files found.");
+				return;
+			}
+
+			Core.Logger.LogInformation("Server start demo cleanup started. Files: {Count}", files.Count);
+
+			foreach (var file in files)
+			{
+				await DeleteFileAsync(file, forceDeleteDemo: true);
+			}
+
+			Core.Logger.LogInformation("Server start demo cleanup finished.");
+		}
+		catch (Exception ex)
+		{
+			Core.Logger.LogError("Server start demo cleanup failed: {Message}", ex.Message);
 		}
 	}
 
