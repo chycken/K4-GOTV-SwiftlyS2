@@ -28,15 +28,6 @@ public sealed partial class Plugin
 		Core.Scheduler.DelayBySeconds(0.1f, () =>
 		{
 			Directory.CreateDirectory(DemoDirectory);
-
-			if (Config.CurrentValue.General.DeleteEveryDemoFromServerAfterServerStart)
-			{
-				Task.Run(async () =>
-				{
-					foreach (var file in Directory.GetFiles(DemoDirectory, "*.dem").Concat(Directory.GetFiles(DemoDirectory, "*.zip")))
-						await DeleteFileAsync(file);
-				});
-			}
 		});
 	}
 
