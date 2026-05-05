@@ -9,7 +9,7 @@ namespace K4GOTV;
 
 [PluginMetadata(
 	Id = "k4.gotv",
-	Version = "1.0.2",
+	Version = "1.0.3",
 	Name = "K4 - GOTV",
 	Author = "K4ryuu",
 	Description = "Advanced GOTV handler with Discord, database, FTP, SFTP and Mega integration.")]
@@ -51,6 +51,11 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 
 		Directory.CreateDirectory(DemoDirectory);
 		Core.Logger.LogInformation("Demo directory: {Path} (exists: {Exists})", DemoDirectory, Directory.Exists(DemoDirectory));
+
+		if (!hotReload && Config.CurrentValue.General.DeleteEveryDemoFromServerAfterServerStart)
+		{
+			Task.Run(DeleteEveryLocalDemoFileAfterServerStartAsync);
+		}
 
 		InitializeDatabase();
 		RegisterEvents();
