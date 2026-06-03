@@ -22,10 +22,6 @@ public sealed partial class Plugin
 
 		try
 		{
-			Core.Logger.LogInformation("Demo processing started: {FileName}", fileName);
-			Core.Logger.LogInformation("Demo source path: {Path}", demoPath);
-			Core.Logger.LogInformation("Zip target path: {Path}", zipPath);
-
 			if (!File.Exists(demoPath))
 			{
 				Core.Logger.LogError("Demo processing skipped, source demo does not exist: {Path}", demoPath);
@@ -33,8 +29,6 @@ public sealed partial class Plugin
 			}
 
 			var demoInfo = new FileInfo(demoPath);
-			Core.Logger.LogInformation("Demo source exists. Size: {Size} bytes", demoInfo.Length);
-
 			if (demoInfo.Length <= 0)
 			{
 				Core.Logger.LogError("Demo processing skipped, source demo is empty: {Path}", demoPath);
@@ -56,15 +50,11 @@ public sealed partial class Plugin
 			var zipInfo = new FileInfo(zipPath);
 			var fileSizeBytes = zipInfo.Length;
 
-			Core.Logger.LogInformation("Zip file created: {Path} ({Size} bytes)", zipPath, fileSizeBytes);
-
 			string? megaLink = null;
 			string? ftpLink = null;
 
 			if (Config.CurrentValue.Ftp.Enabled)
 			{
-				Core.Logger.LogInformation("FTP upload enabled.");
-
 				if (string.IsNullOrWhiteSpace(Config.CurrentValue.Ftp.Host))
 				{
 					Core.Logger.LogError("FTP upload skipped: host is empty.");
@@ -80,8 +70,6 @@ public sealed partial class Plugin
 
 					if (!string.IsNullOrWhiteSpace(ftpLink))
 					{
-						Core.Logger.LogInformation("FTP upload finished: {Link}", ftpLink);
-
 						if (Config.CurrentValue.Ftp.RetentionEnabled)
 							await AddRetentionRecordAsync("ftp", remotePath);
 					}
@@ -91,15 +79,9 @@ public sealed partial class Plugin
 					}
 				}
 			}
-			else
-			{
-				Core.Logger.LogInformation("FTP upload disabled.");
-			}
 
 			if (Config.CurrentValue.Mega.Enabled)
 			{
-				Core.Logger.LogInformation("Mega upload enabled.");
-
 				if (string.IsNullOrWhiteSpace(Config.CurrentValue.Mega.Email))
 				{
 					Core.Logger.LogError("Mega upload skipped: email is empty.");
@@ -116,8 +98,6 @@ public sealed partial class Plugin
 
 					if (!string.IsNullOrWhiteSpace(nodeId))
 					{
-						Core.Logger.LogInformation("Mega upload finished: {Link}", megaLink);
-
 						if (Config.CurrentValue.Mega.RetentionEnabled)
 							await AddRetentionRecordAsync("mega", nodeId);
 					}
@@ -126,10 +106,6 @@ public sealed partial class Plugin
 						Core.Logger.LogError("Mega upload failed. Returned link: {Link}", megaLink);
 					}
 				}
-			}
-			else
-			{
-				Core.Logger.LogInformation("Mega upload disabled.");
 			}
 
 			// Discord webhook kiküldése a linkekkel
@@ -162,31 +138,26 @@ public sealed partial class Plugin
 				);
 			}
 
-			// --- FIX: BIZTONSÁGOS ÉS ELLENŐRZÖTT TÖRLÉSI CIKLUS A FOLYAMAT VEGÉN ---
-			
-			// Nyers .dem fájl törlése, ha a konfig engedi és a feltöltés sikeres volt (van legalább egy élő linkünk)
+			// Nyers .dem fájl törlése
 			if (Config.CurrentValue.General.DeleteDemoAfterUpload && (!string.IsNullOrWhiteSpace(megaLink) || !string.IsNullOrWhiteSpace(ftpLink)))
 			{
 				if (File.Exists(demoPath))
 				{
 					File.Delete(demoPath);
-					if (Config.CurrentValue.General.LogDeletions)
-						Core.Logger.LogInformation("Successfully deleted raw demo file after upload: {Path}", demoPath);
 				}
 			}
 
-			// Tömörített .zip fájl törlése, ha a konfig engedi és a feltöltés sikeres volt
+			// Tömörített .zip fájl törlése
 			if (Config.CurrentValue.General.DeleteZippedDemoAfterUpload && (!string.IsNullOrWhiteSpace(megaLink) || !string.IsNullOrWhiteSpace(ftpLink)))
 			{
 				if (File.Exists(zipPath))
 				{
 					File.Delete(zipPath);
-					if (Config.CurrentValue.General.LogDeletions)
-						Core.Logger.LogInformation("Successfully deleted zipped demo file after upload: {Path}", zipPath);
 				}
 			}
 
-			Core.Logger.LogInformation("Demo processing finished: {FileName}", fileName);
+			// EZ AZ EGYETLEN ÉRTESÍTÉS MARADT: Jelzi, hogy a folyamat kész, és kiírja a közvetlen Mega linket a konzolba
+			Core.Logger.LogInformation("Demo uploaded to Mega: {Link}", !string.IsNullOrWhiteSpace(megaLink) ? megaLink : "No Mega link generated");
 		}
 		catch (Exception ex)
 		{
@@ -205,7 +176,6 @@ public sealed partial class Plugin
 			}
 
 			var sourceInfo = new FileInfo(sourcePath);
-
 			if (sourceInfo.Length <= 0)
 			{
 				Core.Logger.LogError("Zip failed, source file is empty: {Path}", sourcePath);
@@ -214,7 +184,6 @@ public sealed partial class Plugin
 
 			if (File.Exists(zipPath))
 			{
-				Core.Logger.LogInformation("Existing zip found, deleting old zip: {Path}", zipPath);
 				File.Delete(zipPath);
 			}
 
@@ -235,14 +204,12 @@ public sealed partial class Plugin
 			}
 
 			var zipInfo = new FileInfo(zipPath);
-
 			if (zipInfo.Length <= 0)
 			{
 				Core.Logger.LogError("Zip failed, created zip is empty: {Path}", zipPath);
 				return false;
 			}
 
-			Core.Logger.LogInformation("Demo zipped: {Path} ({Size} bytes)", zipPath, zipInfo.Length);
 			return true;
 		}
 		catch (Exception ex)
@@ -259,23 +226,14 @@ public sealed partial class Plugin
 
 		try
 		{
-			Core.Logger.LogInformation("Connecting to FTP server: {Host}:{Port}", cfg.Host, cfg.Port);
-
 			client.Config.EncryptionMode = cfg.UseSftp ? FtpEncryptionMode.Implicit : FtpEncryptionMode.None;
 			client.Config.ValidateAnyCertificate = true;
 
 			await client.AutoConnect();
-
-			Core.Logger.LogInformation("Uploading to FTP: {RemotePath}", remotePath);
-
 			await client.UploadFile(filePath, remotePath);
 
 			var protocol = cfg.UseSftp ? "sftp" : "ftp";
-			var link = $"{protocol}://{cfg.Host}/{remotePath.TrimStart('/')}";
-
-			Core.Logger.LogInformation("FTP upload successful: {Link}", link);
-
-			return link;
+			return $"{protocol}://{cfg.Host}/{remotePath.TrimStart('/')}";
 		}
 		catch (Exception ex)
 		{
@@ -284,14 +242,7 @@ public sealed partial class Plugin
 		}
 		finally
 		{
-			try
-			{
-				await client.Disconnect();
-			}
-			catch
-			{
-				// ignored
-			}
+			try { await client.Disconnect(); } catch { }
 		}
 	}
 
@@ -308,31 +259,22 @@ public sealed partial class Plugin
 			}
 
 			var fileInfo = new FileInfo(filePath);
-
 			if (fileInfo.Length <= 0)
 			{
 				Core.Logger.LogError("Mega upload skipped, file is empty: {Path}", filePath);
 				return (null, null);
 			}
 
-			Core.Logger.LogInformation("Logging in to Mega as: {Email}", Config.CurrentValue.Mega.Email);
-
 			await client.LoginAsync(
 				Config.CurrentValue.Mega.Email,
 				Config.CurrentValue.Mega.Password
 			);
 
-			Core.Logger.LogInformation("Mega login successful.");
-
 			var nodes = await client.GetNodesAsync();
 			var rootNode = nodes.Single(x => x.Type == NodeType.Root);
 
-			Core.Logger.LogInformation("Uploading file to Mega: {Path}", filePath);
-
 			var uploadedNode = await client.UploadFileAsync(filePath, rootNode);
 			var downloadLink = await client.GetDownloadLinkAsync(uploadedNode);
-
-			Core.Logger.LogInformation("Mega upload successful. NodeId: {NodeId}", uploadedNode.Id);
 
 			return (downloadLink.ToString(), uploadedNode.Id.ToString());
 		}
@@ -345,14 +287,7 @@ public sealed partial class Plugin
 		{
 			if (client.IsLoggedIn)
 			{
-				try
-				{
-					await client.LogoutAsync();
-				}
-				catch
-				{
-					// ignored
-				}
+				try { await client.LogoutAsync(); } catch { }
 			}
 		}
 	}
@@ -371,12 +306,7 @@ public sealed partial class Plugin
 		string serverName)
 	{
 		if (string.IsNullOrWhiteSpace(Config.CurrentValue.Discord.WebhookURL))
-		{
-			if (Config.CurrentValue.General.LogUploads)
-				Core.Logger.LogInformation("Discord webhook skipped, webhook URL is empty.");
-
 			return;
-		}
 
 		if (!File.Exists(PayloadTemplatePath))
 		{
@@ -447,8 +377,5 @@ public sealed partial class Plugin
 
 		var response = await httpClient.PostAsync(Config.CurrentValue.Discord.WebhookURL, content);
 		response.EnsureSuccessStatusCode();
-
-		if (Config.CurrentValue.General.LogUploads)
-			Core.Logger.LogInformation("Demo uploaded to Discord: {FileName}", fileName);
 	}
 }
