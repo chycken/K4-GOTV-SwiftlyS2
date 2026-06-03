@@ -9,7 +9,7 @@ namespace K4GOTV;
 
 [PluginMetadata(
 	Id = "k4.gotv",
-	Version = "1.0.4fix",
+	Version = "1.0.3FIX",
 	Name = "K4 - GOTV",
 	Author = "K4ryuu+AI",
 	Description = "Advanced GOTV handler with Discord, database, FTP, SFTP and Mega integration.")]
@@ -64,12 +64,78 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 
 		if (hotReload && Config.CurrentValue.AutoRecord.Enabled && GetRealPlayerCount() > 0)
 			StartRecording("autodemo");
+
+		// --- JAVÍTÁS: FELDOLGOZATLAN DEMÓK RECOVERY INDÍTÁSA ÚJ PÁLYÁN ---
+		Task.Run(async () =>
+		{
+			try
+			{
+				// Várunk 5 másodpercet, hogy a CS2 motor és a fájlrendszer megnyugodjon
+				await Task.Delay(5000);
+
+				if (!Directory.Exists(DemoDirectory)) return;
+
+				var pendingFiles = Directory.GetFiles(DemoDirectory, "*.pending");
+				foreach (var file in pendingFiles)
+				{
+					Core.Logger.LogInformation("Found unfinished demo token from the previous map: {File}", Path.GetFileName(file));
+
+					try
+					{
+						var content = await File.ReadAllTextAsync(file);
+						var parts = content.Split(';');
+
+						if (parts.Length >= 7)
+						{
+							string pendingFileName = parts[0];
+							string pendingDemoPath = parts[1];
+							double pendingDuration = double.Parse(parts[2]);
+							int pendingRound = int.Parse(parts[3]);
+							int pendingPlayerCount = int.Parse(parts[4]);
+							string pendingMapName = parts[5];
+							string pendingServerName = parts[6];
+
+							// Töröljük a pending tokent, nehogy hiba esetén végtelen ciklusba fusson
+							File.Delete(file);
+
+							var finalPath = await WaitForDemoFileAsync(pendingDemoPath, TimeSpan.FromSeconds(15));
+							if (finalPath != null)
+							{
+								Core.Logger.LogInformation("Recovered previous demo successfully. Starting post-processing tasks...");
+								
+								await ProcessDemoAsync(
+									pendingFileName,
+									finalPath,
+									new List<(string Name, ulong SteamId)>(), 
+									TimeSpan.FromSeconds(pendingDuration),
+									pendingRound,
+									pendingPlayerCount,
+									pendingMapName,
+									pendingServerName
+								);
+							}
+							else
+							{
+								Core.Logger.LogError("Could not locate physical demo file for: {Path}", pendingDemoPath);
+							}
+						}
+					}
+					catch (Exception ex)
+					{
+						Core.Logger.LogError("Error processing pending demo file {File}: {Message}", Path.GetFileName(file), ex.Message);
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				Core.Logger.LogError("Error in recovery monitor: {Message}", ex.Message);
+			}
+		});
 	}
 
 	public override void Unload()
 	{
-		// FIX: A plugin leállásakor/hot-reloadjakor is biztonságos módban állítjuk le a rögzítést,
-		// mivel ilyenkor az engine állapota már nem garantált.
+		// Átadjuk a true-t, jelezve, hogy a szerver leállása/pályaváltás váltotta ki az Unload-ot
 		StopRecording(isMapUnload: true);
 
 		_cleanupTimerCts?.Cancel();
