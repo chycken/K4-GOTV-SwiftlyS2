@@ -9,7 +9,9 @@ public sealed partial class Plugin
 
 	private bool _isRecording;
 	private string? _fileName;
+	private string _currentMapName = "unknown";
 	private double _demoStartTime;
+	private DateTime _realStartTime; // Új változó a valós idő mérésére
 	private double _lastPlayerCheckTime;
 	private bool _demoRequestedThisRound;
 	private int _lastKnownPlayerCount;
@@ -23,6 +25,9 @@ public sealed partial class Plugin
 		var gameRules = Core.EntitySystem.GetGameRules();
 		if (!Config.CurrentValue.AutoRecord.RecordWarmup && gameRules?.WarmupPeriod == true)
 			return;
+
+		// Elmentjük a pálya nevét biztonságos helyre, amikor még él a motor
+		_currentMapName = GetSafeMapName();
 
 		var pattern = Config.CurrentValue.AutoRecord.CropRounds
 			? Config.CurrentValue.General.CropRoundsFileNamingPattern
@@ -44,9 +49,10 @@ public sealed partial class Plugin
 
 		_isRecording = true;
 		_demoStartTime = GetSafeCurrentTime();
+		_realStartTime = DateTime.UtcNow; // Itt indítjuk a valós stopperórát
 		_lastPlayerCheckTime = _demoStartTime;
 
-		Core.Logger.LogInformation("Recording started: {FileName}", _fileName);
+		Core.Logger.LogInformation("Recording started: {FileName} on map: {Map}", _fileName, _currentMapName);
 
 		if (Config.CurrentValue.AutoRecord.StopOnIdle)
 		{
@@ -55,191 +61,136 @@ public sealed partial class Plugin
 		}
 	}
 
-	public void StopRecording(bool isMapUnload = false)
+	private void StopRecording(bool isMapUnload = false)
 	{
 		_idleTimerCts?.Cancel();
 		_idleTimerCts = null;
 
-		// Ha már nem rögzítünk, vagy nincs fájlnév, azonnal lépjünk ki
 		if (!_isRecording || string.IsNullOrEmpty(_fileName))
 		{
-			ResetRecordingState();
-			return;
-		}
-
-		// FIX: Térképváltáskor (Map Unload) a CS2 motor automatikusan lezárja a demót.
-		// Ha ilyenkor manuálisan is ráküldjük a tv_stoprecord parancsot, a Source 2 motor hajlamos azonnal összeomlani (Segmentation fault).
-		if (isMapUnload)
-		{
-			Core.Logger.LogInformation("Map unload detected. Skipping tv_stoprecord to let the engine close the file safely.");
-			ResetRecordingState();
+			if (!isMapUnload) 
+				ResetRecordingState();
 			return;
 		}
 
 		var stoppedFileName = _fileName;
 		var demoPath = Path.Combine(DemoDirectory, $"{stoppedFileName}.dem");
 
-		// Mindent a főszálon kérünk le, amíg az engine elérhető és stabil
-		var currentTime = GetSafeCurrentTime();
-		var duration = Math.Max(0, currentTime - _demoStartTime);
-		var requesters = _requesters.ToList();
+		// Biztonságos adatmentés helyi C# változókból
+		double duration = 0;
+		string mapName = _currentMapName;
+		string serverName = "CS2 Server";
+		int round = 1;
+		int playerCount = _lastKnownPlayerCount;
+		var requesters = new List<(string Name, ulong SteamId)>();
 
-		var mapName = GetSafeMapName();
-		var serverName = GetSafeServerName();
-		var round = GetSafeRound();
-
-		UpdateLastKnownPlayerCount();
-		var playerCount = Math.Max(_lastKnownPlayerCount, requesters.Count);
-
-		try
+		if (isMapUnload)
 		{
-			Core.Engine.ExecuteCommand("tv_stoprecord");
-			Core.Logger.LogInformation("Recording stopped: {FileName}", stoppedFileName);
+			Core.Logger.LogInformation("Map unload detected. Catching demo data safely from C# memory (Map: {Map}).", mapName);
+			
+			// Tűpontos időszámítás a két DateTime különbségéből, teljesen függetlenül a játékmotortól
+			try 
+			{ 
+				duration = (DateTime.UtcNow - _realStartTime).TotalSeconds; 
+			} 
+			catch 
+			{ 
+				duration = 0; 
+			}
 		}
-		catch (Exception ex)
+		else
 		{
-			Core.Logger.LogError("Failed to stop GOTV recording: {Message}", ex.Message);
+			var currentTime = GetSafeCurrentTime();
+			duration = Math.Max(0, currentTime - _demoStartTime);
+			requesters = _requesters.ToList();
+			mapName = GetSafeMapName();
+			serverName = GetSafeServerName();
+			round = GetSafeRound();
+			UpdateLastKnownPlayerCount();
+			playerCount = Math.Max(_lastKnownPlayerCount, requesters.Count);
+
+			try
+			{
+				Core.Engine.ExecuteCommand("tv_stoprecord");
+				Core.Logger.LogInformation("Recording stopped normally: {FileName}", stoppedFileName);
+			}
+			catch (Exception ex)
+			{
+				Core.Logger.LogError("Failed to stop GOTV recording: {Message}", ex.Message);
+			}
 		}
 
 		ResetRecordingState();
 
-		if (duration < Config.CurrentValue.General.MinimumDemoDuration)
-		{
-			Core.Logger.LogInformation(
-				"Demo skipped because duration is too short: {FileName}, {Duration}s",
-				stoppedFileName,
-				duration
-			);
-			return;
-		}
-
-		// A háttérszál biztonságos indítása, kizárólag előre kimentett, szálbiztos adatokkal
+		// Háttérszál indítása a zippeléshez és feltöltéshez
 		Task.Run(async () =>
 		{
-			var finalDemoPath = await WaitForDemoFileAsync(demoPath, TimeSpan.FromSeconds(30));
-
-			if (finalDemoPath == null)
-			{
-				Core.Logger.LogError("Demo file not found after waiting: {Path}", demoPath);
-				try
-				{
-					if (Directory.Exists(DemoDirectory))
-					{
-						var files = Directory.GetFiles(DemoDirectory, "*.dem")
-							.Select(Path.GetFileName);
-
-						Core.Logger.LogInformation("Existing demo files: {Files}", string.Join(", ", files));
-					}
-				}
-				catch (Exception ex)
-				{
-					Core.Logger.LogError("Failed to list demo directory: {Message}", ex.Message);
-				}
-				return;
-			}
-
-			await ProcessDemoAsync(
-				stoppedFileName,
-				finalDemoPath,
-				requesters,
-				TimeSpan.FromSeconds(duration),
-				round,
-				playerCount,
-				mapName,
-				serverName
-			);
-		});
-	}
-
-	private async Task<string?> WaitForDemoFileAsync(string expectedPath, TimeSpan timeout)
-	{
-		var startedAt = DateTime.UtcNow;
-		var directory = Path.GetDirectoryName(expectedPath);
-		var baseName = Path.GetFileNameWithoutExtension(expectedPath);
-
-		if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
-		{
-			Core.Logger.LogError("Demo directory does not exist: {Dir}", directory);
-			return null;
-		}
-
-		string? lastPath = null;
-		long lastSize = -1;
-		int stableChecks = 0;
-
-		Core.Logger.LogInformation("Starting to wait for demo file. Expected: {Path}", expectedPath);
-
-		while (DateTime.UtcNow - startedAt < timeout)
-		{
-			var candidates = new List<string>();
-
-			// 1. Alap opciók ellenőrzése
-			if (File.Exists(expectedPath)) candidates.Add(expectedPath);
-			if (File.Exists(expectedPath + ".dem")) candidates.Add(expectedPath + ".dem");
-
-			// 2. Keresés minta alapján a mappában
 			try
 			{
-				candidates.AddRange(Directory.GetFiles(directory, $"{baseName}*.dem"));
-				
-				// BIZTONSÁGI MENTÉS: Ha még mindig nincs jelölt, vegyük a mappa legfrissebb .dem fájlját, 
-				// hátha az engine teljesen más nevet adott neki (pl. auto-generated név)
-				if (candidates.Count == 0)
+				if (isMapUnload) await Task.Delay(3000);
+
+				var finalDemoPath = await WaitForDemoFileAsync(demoPath, TimeSpan.FromSeconds(20));
+
+				if (finalDemoPath == null)
 				{
-					var dynamicMatch = Directory.GetFiles(directory, "*.dem")
-						.Select(p => new FileInfo(p))
-						.OrderByDescending(f => f.LastWriteTimeUtc)
-						.FirstOrDefault();
-						
-					if (dynamicMatch != null && (DateTime.UtcNow - dynamicMatch.LastWriteTimeUtc).TotalSeconds < 30)
-					{
-						candidates.Add(dynamicMatch.FullName);
-					}
+					Core.Logger.LogError("Demo file (.dem) could not be verified on disk: {Path}", demoPath);
+					return;
 				}
+
+				Core.Logger.LogInformation("Starting compression and upload for: {FileName}", stoppedFileName);
+				
+				await ProcessDemoAsync(
+					stoppedFileName,
+					finalDemoPath,
+					requesters,
+					TimeSpan.FromSeconds(duration > 0 ? duration : 300),
+					round,
+					playerCount,
+					mapName,
+					serverName
+				);
 			}
 			catch (Exception ex)
 			{
-				Core.Logger.LogError("Error scanning directory for dem files: {Message}", ex.Message);
+				Core.Logger.LogError("Error in background upload thread: {Message}", ex.Message);
 			}
+		});
+	}
 
-			// Legfrissebb, nem üres fájl kiválasztása
-			var foundPath = candidates
-				.Distinct()
-				.Where(File.Exists)
-				.Select(path => new FileInfo(path))
-				.Where(info => info.Length > 0)
-				.OrderByDescending(info => info.LastWriteTimeUtc)
-				.Select(info => info.FullName)
-				.FirstOrDefault();
+	public async Task<string?> WaitForDemoFileAsync(string expectedPath, TimeSpan timeout)
+	{
+		var startedAt = DateTime.UtcNow;
 
-			if (foundPath != null)
+		while (DateTime.UtcNow - startedAt < timeout)
+		{
+			if (File.Exists(expectedPath))
 			{
-				var currentSize = new FileInfo(foundPath).Length;
+				var info = new FileInfo(expectedPath);
+				if (info.Length > 0) return expectedPath;
+			}
 
-				// Megvárjuk, amíg a fájl mérete megáll (a CS2 befejezte az írást)
-				if (foundPath == lastPath && currentSize == lastSize)
-				{
-					stableChecks++;
-					if (stableChecks >= 2)
-					{
-						Core.Logger.LogInformation("Demo file stabilized and ready: {Path} ({Size} bytes)", foundPath, currentSize);
-						return foundPath;
-					}
-				}
-				else
-				{
-					lastPath = foundPath;
-					lastSize = currentSize;
-					stableChecks = 0;
+			if (File.Exists(expectedPath + ".dem"))
+			{
+				var info = new FileInfo(expectedPath + ".dem");
+				if (info.Length > 0) return expectedPath + ".dem";
+			}
 
-					Core.Logger.LogInformation("Demo file found but still writing: {Path} ({Size} bytes)", foundPath, currentSize);
+			var directory = Path.GetDirectoryName(expectedPath);
+			var baseName = Path.GetFileNameWithoutExtension(expectedPath);
+
+			if (!string.IsNullOrEmpty(directory) && Directory.Exists(directory))
+			{
+				var files = Directory.GetFiles(directory, $"{baseName}*.dem");
+				if (files.Length > 0)
+				{
+					var file = files.OrderByDescending(f => File.GetLastWriteTimeUtc(f)).First();
+					if (new FileInfo(file).Length > 0) return file;
 				}
 			}
 
-			await Task.Delay(1500); // 1.5 másodpercenként ellenőrizzük újra
+			await Task.Delay(1000);
 		}
 
-		Core.Logger.LogError("Timeout reached. Demo file never appeared or stayed at 0 bytes: {Path}", expectedPath);
 		return null;
 	}
 
@@ -247,9 +198,19 @@ public sealed partial class Plugin
 	{
 		_isRecording = false;
 		_fileName = null;
+		_currentMapName = "unknown";
 		_demoStartTime = 0;
 		_demoRequestedThisRound = false;
 		_lastKnownPlayerCount = 0;
+		
+		try
+		{
+			_requesters.Clear();
+		}
+		catch
+		{
+			// Elnyelve
+		}
 	}
 
 	private void CheckIdleState()
