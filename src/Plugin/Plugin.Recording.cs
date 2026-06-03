@@ -55,13 +55,23 @@ public sealed partial class Plugin
 		}
 	}
 
-	private void StopRecording()
+	public void StopRecording(bool isMapUnload = false)
 	{
 		_idleTimerCts?.Cancel();
 		_idleTimerCts = null;
 
+		// Ha már nem rögzítünk, vagy nincs fájlnév, azonnal lépjünk ki
 		if (!_isRecording || string.IsNullOrEmpty(_fileName))
 		{
+			ResetRecordingState();
+			return;
+		}
+
+		// FIX: Térképváltáskor (Map Unload) a CS2 motor automatikusan lezárja a demót.
+		// Ha ilyenkor manuálisan is ráküldjük a tv_stoprecord parancsot, a Source 2 motor hajlamos azonnal összeomlani (Segmentation fault).
+		if (isMapUnload)
+		{
+			Core.Logger.LogInformation("Map unload detected. Skipping tv_stoprecord to let the engine close the file safely.");
 			ResetRecordingState();
 			return;
 		}
@@ -69,9 +79,9 @@ public sealed partial class Plugin
 		var stoppedFileName = _fileName;
 		var demoPath = Path.Combine(DemoDirectory, $"{stoppedFileName}.dem");
 
+		// Mindent a főszálon kérünk le, amíg az engine elérhető és stabil
 		var currentTime = GetSafeCurrentTime();
 		var duration = Math.Max(0, currentTime - _demoStartTime);
-
 		var requesters = _requesters.ToList();
 
 		var mapName = GetSafeMapName();
@@ -100,10 +110,10 @@ public sealed partial class Plugin
 				stoppedFileName,
 				duration
 			);
-
 			return;
 		}
 
+		// A háttérszál biztonságos indítása, kizárólag előre kimentett, szálbiztos adatokkal
 		Task.Run(async () =>
 		{
 			var finalDemoPath = await WaitForDemoFileAsync(demoPath, TimeSpan.FromSeconds(30));
@@ -111,7 +121,6 @@ public sealed partial class Plugin
 			if (finalDemoPath == null)
 			{
 				Core.Logger.LogError("Demo file not found after waiting: {Path}", demoPath);
-
 				try
 				{
 					if (Directory.Exists(DemoDirectory))
@@ -126,7 +135,6 @@ public sealed partial class Plugin
 				{
 					Core.Logger.LogError("Failed to list demo directory: {Message}", ex.Message);
 				}
-
 				return;
 			}
 
