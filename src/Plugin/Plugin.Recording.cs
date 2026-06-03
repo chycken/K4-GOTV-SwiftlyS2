@@ -10,8 +10,9 @@ public sealed partial class Plugin
 	private bool _isRecording;
 	private string? _fileName;
 	private string _currentMapName = "unknown";
+	private string _currentServerName = "CS2 Server";
 	private double _demoStartTime;
-	private DateTime _realStartTime; // Új változó a valós idő mérésére
+	private DateTime _realStartTime;
 	private double _lastPlayerCheckTime;
 	private bool _demoRequestedThisRound;
 	private int _lastKnownPlayerCount;
@@ -26,8 +27,8 @@ public sealed partial class Plugin
 		if (!Config.CurrentValue.AutoRecord.RecordWarmup && gameRules?.WarmupPeriod == true)
 			return;
 
-		// Elmentjük a pálya nevét biztonságos helyre, amikor még él a motor
 		_currentMapName = GetSafeMapName();
+		_currentServerName = GetSafeServerName();
 
 		var pattern = Config.CurrentValue.AutoRecord.CropRounds
 			? Config.CurrentValue.General.CropRoundsFileNamingPattern
@@ -49,10 +50,11 @@ public sealed partial class Plugin
 
 		_isRecording = true;
 		_demoStartTime = GetSafeCurrentTime();
-		_realStartTime = DateTime.UtcNow; // Itt indítjuk a valós stopperórát
+		_realStartTime = DateTime.UtcNow;
 		_lastPlayerCheckTime = _demoStartTime;
 
-		Core.Logger.LogInformation("Recording started: {FileName} on map: {Map}", _fileName, _currentMapName);
+		// Ezt meghagytuk, mert fontos látni, ha elindul a felvétel
+		Core.Logger.LogInformation("Recording started: {FileName} ({Map})", _fileName, _currentMapName);
 
 		if (Config.CurrentValue.AutoRecord.StopOnIdle)
 		{
@@ -76,27 +78,16 @@ public sealed partial class Plugin
 		var stoppedFileName = _fileName;
 		var demoPath = Path.Combine(DemoDirectory, $"{stoppedFileName}.dem");
 
-		// Biztonságos adatmentés helyi C# változókból
 		double duration = 0;
 		string mapName = _currentMapName;
-		string serverName = "CS2 Server";
+		string serverName = _currentServerName;
 		int round = 1;
 		int playerCount = _lastKnownPlayerCount;
 		var requesters = new List<(string Name, ulong SteamId)>();
 
 		if (isMapUnload)
 		{
-			Core.Logger.LogInformation("Map unload detected. Catching demo data safely from C# memory (Map: {Map}).", mapName);
-			
-			// Tűpontos időszámítás a két DateTime különbségéből, teljesen függetlenül a játékmotortól
-			try 
-			{ 
-				duration = (DateTime.UtcNow - _realStartTime).TotalSeconds; 
-			} 
-			catch 
-			{ 
-				duration = 0; 
-			}
+			try { duration = (DateTime.UtcNow - _realStartTime).TotalSeconds; } catch { duration = 0; }
 		}
 		else
 		{
@@ -112,7 +103,6 @@ public sealed partial class Plugin
 			try
 			{
 				Core.Engine.ExecuteCommand("tv_stoprecord");
-				Core.Logger.LogInformation("Recording stopped normally: {FileName}", stoppedFileName);
 			}
 			catch (Exception ex)
 			{
@@ -122,7 +112,6 @@ public sealed partial class Plugin
 
 		ResetRecordingState();
 
-		// Háttérszál indítása a zippeléshez és feltöltéshez
 		Task.Run(async () =>
 		{
 			try
@@ -137,8 +126,7 @@ public sealed partial class Plugin
 					return;
 				}
 
-				Core.Logger.LogInformation("Starting compression and upload for: {FileName}", stoppedFileName);
-				
+				// Elindítja a háttérfeldolgozást (a felesleges belső szövegeket elnémítottuk)
 				await ProcessDemoAsync(
 					stoppedFileName,
 					finalDemoPath,
@@ -199,6 +187,7 @@ public sealed partial class Plugin
 		_isRecording = false;
 		_fileName = null;
 		_currentMapName = "unknown";
+		_currentServerName = "CS2 Server";
 		_demoStartTime = 0;
 		_demoRequestedThisRound = false;
 		_lastKnownPlayerCount = 0;
