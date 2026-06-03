@@ -154,29 +154,55 @@ public sealed partial class Plugin
 	private async Task<string?> WaitForDemoFileAsync(string expectedPath, TimeSpan timeout)
 	{
 		var startedAt = DateTime.UtcNow;
+		var directory = Path.GetDirectoryName(expectedPath);
+		var baseName = Path.GetFileNameWithoutExtension(expectedPath);
+
+		if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+		{
+			Core.Logger.LogError("Demo directory does not exist: {Dir}", directory);
+			return null;
+		}
 
 		string? lastPath = null;
 		long lastSize = -1;
 		int stableChecks = 0;
 
+		Core.Logger.LogInformation("Starting to wait for demo file. Expected: {Path}", expectedPath);
+
 		while (DateTime.UtcNow - startedAt < timeout)
 		{
 			var candidates = new List<string>();
 
-			if (File.Exists(expectedPath))
-				candidates.Add(expectedPath);
+			// 1. Alap opciók ellenőrzése
+			if (File.Exists(expectedPath)) candidates.Add(expectedPath);
+			if (File.Exists(expectedPath + ".dem")) candidates.Add(expectedPath + ".dem");
 
-			if (File.Exists(expectedPath + ".dem"))
-				candidates.Add(expectedPath + ".dem");
-
-			var directory = Path.GetDirectoryName(expectedPath);
-			var baseName = Path.GetFileNameWithoutExtension(expectedPath);
-
-			if (!string.IsNullOrEmpty(directory) && Directory.Exists(directory))
+			// 2. Keresés minta alapján a mappában
+			try
 			{
 				candidates.AddRange(Directory.GetFiles(directory, $"{baseName}*.dem"));
+				
+				// BIZTONSÁGI MENTÉS: Ha még mindig nincs jelölt, vegyük a mappa legfrissebb .dem fájlját, 
+				// hátha az engine teljesen más nevet adott neki (pl. auto-generated név)
+				if (candidates.Count == 0)
+				{
+					var dynamicMatch = Directory.GetFiles(directory, "*.dem")
+						.Select(p => new FileInfo(p))
+						.OrderByDescending(f => f.LastWriteTimeUtc)
+						.FirstOrDefault();
+						
+					if (dynamicMatch != null && (DateTime.UtcNow - dynamicMatch.LastWriteTimeUtc).TotalSeconds < 30)
+					{
+						candidates.Add(dynamicMatch.FullName);
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				Core.Logger.LogError("Error scanning directory for dem files: {Message}", ex.Message);
 			}
 
+			// Legfrissebb, nem üres fájl kiválasztása
 			var foundPath = candidates
 				.Distinct()
 				.Where(File.Exists)
@@ -190,18 +216,13 @@ public sealed partial class Plugin
 			{
 				var currentSize = new FileInfo(foundPath).Length;
 
+				// Megvárjuk, amíg a fájl mérete megáll (a CS2 befejezte az írást)
 				if (foundPath == lastPath && currentSize == lastSize)
 				{
 					stableChecks++;
-
 					if (stableChecks >= 2)
 					{
-						Core.Logger.LogInformation(
-							"Demo file ready: {Path} ({Size} bytes)",
-							foundPath,
-							currentSize
-						);
-
+						Core.Logger.LogInformation("Demo file stabilized and ready: {Path} ({Size} bytes)", foundPath, currentSize);
 						return foundPath;
 					}
 				}
@@ -211,17 +232,14 @@ public sealed partial class Plugin
 					lastSize = currentSize;
 					stableChecks = 0;
 
-					Core.Logger.LogInformation(
-						"Waiting for demo file to stabilize: {Path} ({Size} bytes)",
-						foundPath,
-						currentSize
-					);
+					Core.Logger.LogInformation("Demo file found but still writing: {Path} ({Size} bytes)", foundPath, currentSize);
 				}
 			}
 
-			await Task.Delay(1000);
+			await Task.Delay(1500); // 1.5 másodpercenként ellenőrizzük újra
 		}
 
+		Core.Logger.LogError("Timeout reached. Demo file never appeared or stayed at 0 bytes: {Path}", expectedPath);
 		return null;
 	}
 
