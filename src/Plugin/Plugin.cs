@@ -26,7 +26,7 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 	private CancellationTokenSource? _ftpRetentionTimerCts;
 	private CancellationTokenSource? _megaRetentionTimerCts;
 
-	private string DemoDirectory => Path.Combine(Core.CSGODirectory, Config.CurrentValue.General.DemoDirectory);
+	private string DemoDirectory => Path.Combine(Core.GameFilesDirectory, Config.CurrentValue.General.DemoDirectory);
 	private string RetentionFilePath => Path.Combine(Core.PluginDataDirectory, "uploads_retention.json");
 	private string PayloadTemplatePath => Path.Combine(Core.PluginPath, "resources", "payload.json");
 
