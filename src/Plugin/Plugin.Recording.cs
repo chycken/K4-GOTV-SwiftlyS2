@@ -53,7 +53,6 @@ public sealed partial class Plugin
 		_realStartTime = DateTime.UtcNow;
 		_lastPlayerCheckTime = _demoStartTime;
 
-		// Ezt meghagytuk, mert fontos látni, ha elindul a felvétel
 		Core.Logger.LogInformation("Recording started: {FileName} ({Map})", _fileName, _currentMapName);
 
 		if (Config.CurrentValue.AutoRecord.StopOnIdle)
@@ -126,7 +125,6 @@ public sealed partial class Plugin
 					return;
 				}
 
-				// Elindítja a háttérfeldolgozást (a felesleges belső szövegeket elnémítottuk)
 				await ProcessDemoAsync(
 					stoppedFileName,
 					finalDemoPath,
@@ -151,28 +149,38 @@ public sealed partial class Plugin
 
 		while (DateTime.UtcNow - startedAt < timeout)
 		{
+			string? targetPath = null;
+
 			if (File.Exists(expectedPath))
 			{
-				var info = new FileInfo(expectedPath);
-				if (info.Length > 0) return expectedPath;
+				targetPath = expectedPath;
 			}
-
-			if (File.Exists(expectedPath + ".dem"))
+			else if (File.Exists(expectedPath + ".dem"))
 			{
-				var info = new FileInfo(expectedPath + ".dem");
-				if (info.Length > 0) return expectedPath + ".dem";
+				targetPath = expectedPath + ".dem";
 			}
-
-			var directory = Path.GetDirectoryName(expectedPath);
-			var baseName = Path.GetFileNameWithoutExtension(expectedPath);
-
-			if (!string.IsNullOrEmpty(directory) && Directory.Exists(directory))
+			else
 			{
-				var files = Directory.GetFiles(directory, $"{baseName}*.dem");
-				if (files.Length > 0)
+				var directory = Path.GetDirectoryName(expectedPath);
+				var baseName = Path.GetFileNameWithoutExtension(expectedPath);
+
+				if (!string.IsNullOrEmpty(directory) && Directory.Exists(directory))
 				{
-					var file = files.OrderByDescending(f => File.GetLastWriteTimeUtc(f)).First();
-					if (new FileInfo(file).Length > 0) return file;
+					var files = Directory.GetFiles(directory, $"{baseName}*.dem");
+					if (files.Length > 0)
+					{
+						targetPath = files.OrderByDescending(f => File.GetLastWriteTimeUtc(f)).First();
+					}
+				}
+			}
+
+			if (targetPath != null)
+			{
+				var info = new FileInfo(targetPath);
+				// Csak akkor fogadjuk el, ha a fájl létezik, nem üres, ÉS az engine már feloldotta róla a kizárólagos zárat
+				if (info.Length > 0 && IsFileReady(targetPath))
+				{
+					return targetPath;
 				}
 			}
 
@@ -180,6 +188,20 @@ public sealed partial class Plugin
 		}
 
 		return null;
+	}
+
+	// Ellenőrzi, hogy a fájl megnyitható-e olvasásra anélkül, hogy a más folyamatok általi zárolás akadályozná
+	private static bool IsFileReady(string filename)
+	{
+		try
+		{
+			using var inputStream = File.Open(filename, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+			return inputStream.Length > 0;
+		}
+		catch (IOException)
+		{
+			return false;
+		}
 	}
 
 	private void ResetRecordingState()
