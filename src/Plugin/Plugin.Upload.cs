@@ -156,7 +156,6 @@ public sealed partial class Plugin
 				}
 			}
 
-			// EZ AZ EGYETLEN ÉRTESÍTÉS MARADT: Jelzi, hogy a folyamat kész, és kiírja a közvetlen Mega linket a konzolba
 			Core.Logger.LogInformation("Demo uploaded to Mega: {Link}", !string.IsNullOrWhiteSpace(megaLink) ? megaLink : "No Mega link generated");
 		}
 		catch (Exception ex)
@@ -190,11 +189,19 @@ public sealed partial class Plugin
 			await Task.Run(() =>
 			{
 				using var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create);
-				zip.CreateEntryFromFile(
+				var entryName = Path.GetFileName(sourcePath);
+
+				// BIZTONSÁGOS OLVASÁS: FileShare.ReadWrite opcióval nyitjuk meg a fájlt, így nem akad el, ha a CS2 engine még írási zárat tart rajta
+				using var sourceStream = new FileStream(
 					sourcePath,
-					Path.GetFileName(sourcePath),
-					CompressionLevel.Optimal
+					FileMode.Open,
+					FileAccess.Read,
+					FileShare.ReadWrite | FileShare.Delete
 				);
+
+				var entry = zip.CreateEntry(entryName, CompressionLevel.Optimal);
+				using var entryStream = entry.Open();
+				sourceStream.CopyTo(entryStream);
 			});
 
 			if (!File.Exists(zipPath))
